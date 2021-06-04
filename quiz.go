@@ -2,47 +2,39 @@ package main
 
 import (
 	"bufio"
-	"encoding/csv"
 	"flag"
 	"fmt"
 	"log"
 	"os"
 	"strings"
+	"time"
 )
 
-func readCsvFile(filePath string) [][]string {
-	file, err := os.Open(filePath)
-	if err != nil {
-		log.Fatal("Unable to read input file: "+filePath, err)
-	}
-	defer file.Close()
+const (
+	defaultProblemsCSV       = "data/problems.csv"
+	defaultTimerOutInSeconds = 30
+	csvUsage                 = "a csv file in the format of 'question,answer' (default \"problems.csv\")"
+	limitUsage               = "the time limit for the quiz in seconds (default 30)"
+)
 
-	csvReader := csv.NewReader(file)
-	records, err := csvReader.ReadAll()
-	if err != nil {
-		log.Fatal("Unable to parse CSV file: "+filePath, err)
-	}
-
-	return records
+type QuizInputs struct {
+	csv   string
+	limit int
 }
 
-type QuizProblem struct {
-	Question string
-	Answer   string
-}
-
-func readProblems(filePath string) []QuizProblem {
-	lines := readCsvFile(filePath)
-
-	var problems []QuizProblem
-	for _, line := range lines {
-		problem := QuizProblem{
-			Question: line[0],
-			Answer:   line[1],
-		}
-		problems = append(problems, problem)
+func getQuizInputs() QuizInputs {
+	problemsCSV := flag.String("csv", defaultProblemsCSV, csvUsage)
+	limit := flag.Int("limit", defaultTimerOutInSeconds, limitUsage)
+	flag.Parse()
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stdout, "Usage of %s:\n", os.Args[0])
+		flag.PrintDefaults()
 	}
-	return problems
+
+	return QuizInputs{
+		csv:   *problemsCSV,
+		limit: *limit,
+	}
 }
 
 func askQuestion(inputReader *bufio.Reader, problem QuizProblem) string {
@@ -54,25 +46,43 @@ func askQuestion(inputReader *bufio.Reader, problem QuizProblem) string {
 	return strings.TrimSuffix(line, "\n")
 }
 
-const defaultProblemsCSV = "data/problems.csv"
+func StartQuiz(inputReader *bufio.Reader, problems []QuizProblem) <-chan int {
+	answers := make(chan int)
+	go func() {
+		for _, problem := range problems {
+			if answer := askQuestion(inputReader, problem); answer == problem.Answer {
+				answers <- 1
+			} else {
+				answers <- 0
+			}
+		}
+	}()
+	return answers
+}
 
 func main() {
-	csvUsage := "a csv file in the format of 'question,answer' (default \"problems.csv\")"
-	problemsCSV := flag.String("csv", defaultProblemsCSV, csvUsage)
-	//limit := flag.Int("limit", 30, "the time limit for the quiz in seconds (default 30)")
-	flag.Parse()
-	flag.Usage = func() {
-		fmt.Fprintf(os.Stdout, "Usage of %s:\n", os.Args[0])
-		flag.PrintDefaults()
+	quizInputs := getQuizInputs()
+
+	userInputReader := bufio.NewReader(os.Stdin)
+
+	fmt.Print("Press enter to start quiz")
+	_, err := userInputReader.ReadString('\n')
+	if err != nil {
+		log.Fatal("Failed to read user input", err)
 	}
 
-	inputReader := bufio.NewReader(os.Stdin)
-	problems := readProblems(*problemsCSV)
-	var correctProblems int
-	for _, problem := range problems {
-		if answer := askQuestion(inputReader, problem); answer == problem.Answer {
-			correctProblems += 1
+	problems := ReadProblems(quizInputs.csv)
+	timeOut := time.After(time.Duration(quizInputs.limit) * time.Second)
+
+	userAnswers := StartQuiz(userInputReader, problems)
+	var score int
+	for {
+		select {
+		case answer := <-userAnswers:
+			score += answer
+		case <-timeOut:
+			fmt.Printf("\n%d/%d correct", score, len(problems))
+			return
 		}
 	}
-	fmt.Println(correctProblems, "/", len(problems), " correct")
 }

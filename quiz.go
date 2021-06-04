@@ -60,6 +60,18 @@ func StartQuiz(inputReader *bufio.Reader, problems []QuizProblem) <-chan int {
 	return answers
 }
 
+func CalculateUserScore(userAnswers <-chan int, limit <-chan time.Time) int {
+	var score int
+	for {
+		select {
+		case answer := <-userAnswers:
+			score += answer
+		case <-limit:
+			return score
+		}
+	}
+}
+
 func main() {
 	quizInputs := getQuizInputs()
 
@@ -71,18 +83,17 @@ func main() {
 		log.Fatal("Failed to read user input", err)
 	}
 
-	problems := ReadProblems(quizInputs.csv)
-	timeOut := time.After(time.Duration(quizInputs.limit) * time.Second)
+	file, err := os.Open(quizInputs.csv)
+	if err != nil {
+		log.Fatal("Unable to read input file: "+quizInputs.csv, err)
+	}
+	defer file.Close()
+	problems := ReadCSVProblems(file)
 
 	userAnswers := StartQuiz(userInputReader, problems)
-	var score int
-	for {
-		select {
-		case answer := <-userAnswers:
-			score += answer
-		case <-timeOut:
-			fmt.Printf("\n%d/%d correct", score, len(problems))
-			return
-		}
-	}
+
+	timeOut := time.After(time.Duration(quizInputs.limit) * time.Second)
+	score := CalculateUserScore(userAnswers, timeOut)
+
+	fmt.Printf("\n%d/%d correct", score, len(problems))
 }
